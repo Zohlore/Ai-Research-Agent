@@ -178,3 +178,19 @@ def get_agent():
     if _agent_instance is None:
         _agent_instance = ResearchAgent()
     return _agent_instance
+
+# In agent.py
+from cache import cache
+
+def research(self, topic: str):
+    # Check cache first
+    cached = cache.get(topic)
+    if cached:
+        logger.info(f"✅ Returning cached result for: {topic[:50]}...")
+        return cached
+    
+    # ... existing research logic ...
+    
+    # Cache the result
+    cache.set(topic, result)
+    return result
