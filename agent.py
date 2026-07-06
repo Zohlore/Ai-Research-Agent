@@ -13,10 +13,11 @@ from tavily import TavilyClient
 
 from models import ResearchReport
 from logger import logger
+from cache import cache          # <-- ADD THIS AT THE TOP
 
 # Fix Windows console encoding for emojis
 if sys.platform == "win32":
-    sys.stdout.reconfigure(encoding='utf-8')  # type: ignore
+    sys.stdout.reconfigure(encoding='utf-8')
 
 load_dotenv()
 
@@ -29,7 +30,7 @@ class ResearchAgent:
         self.openai_api_key = os.getenv("OPENAI_API_KEY")
         self.tavily_api_key = os.getenv("TAVILY_API_KEY")
         if not self.openai_api_key or not self.tavily_api_key:
-            raise ValueError("Missing API keys in .env")
+            raise ValueError("Missing API keys in .env or environment variables")
 
         self.llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.1, api_key=self.openai_api_key)
         self.tavily = TavilyClient(api_key=self.tavily_api_key)
@@ -39,58 +40,16 @@ class ResearchAgent:
         self.app = self.graph.compile()
         logger.info("Research Agent initialized successfully")
 
-    def _search_web(self, query: str) -> str:
-        logger.info(f"🔍 Searching web for: '{query}'")
-        try:
-            response = self.tavily.search(query=query, search_depth="advanced", max_results=5)
-            results = response.get('results', [])
-            if not results:
-                return "No results found."
-            formatted = []
-            for r in results[:5]:
-                formatted.append(f"Title: {r.get('title')}\nContent: {r.get('content')[:800]}")
-            logger.info(f"✅ Found {len(results)} results")
-            return "\n\n".join(formatted)
-        except Exception as e:
-            logger.error(f"Search failed: {e}")
-            return f"Error: {e}"
-
-    def _create_tools(self):
-        # Use StructuredTool from langchain_core.tools (works with ToolNode)
-        return [
-            StructuredTool.from_function(
-                func=self._search_web,
-                name="web_search",
-                description="Searches the web for up-to-date information. Input is a specific query."
-            )
-        ]
-
-    def _build_graph(self):
-        tool_node = ToolNode(self.tools)
-
-        def agent_node(state: AgentState):
-            messages = state['messages']
-            llm_with_tools = self.llm.bind_tools(self.tools)
-            response = llm_with_tools.invoke(messages)
-            return {"messages": [response]}
-
-        def should_continue(state):
-            messages = state['messages']
-            last = messages[-1]
-            if hasattr(last, 'tool_calls') and last.tool_calls:
-                return "tools"
-            return END
-
-        workflow = StateGraph(AgentState)
-        workflow.add_node("agent", agent_node)
-        workflow.add_node("tools", tool_node)
-        workflow.set_entry_point("agent")
-        workflow.add_edge("tools", "agent")
-        workflow.add_conditional_edges("agent", should_continue)
-        return workflow
+    # ... (keep the rest of the methods as they are, but update `research` method to use cache)
 
     def research(self, topic: str) -> Dict[str, Any]:
-        logger.info(f"Starting research on topic: '{topic}'")
+        # Check cache first
+        cached = cache.get(topic)
+        if cached:
+            logger.info(f"✅ Returning cached result for: {topic[:50]}...")
+            return cached
+
+        logger.info(f"Starting fresh research on topic: '{topic}'")
         initial_state = {
             "messages": [{
                 "role": "user",
@@ -119,6 +78,12 @@ Start now by doing your first web_search."""
             logger.error(f"Graph execution failed: {e}")
             return {"success": False, "error": str(e), "topic": topic}
 
+        # Parse output into report...
+        # (existing parsing logic)
+
+        # After you have `report_dict`, cache the result before returning
+        # (you'll need to store the final result dict)
+        # For simplicity, we'll create the result dict then cache it.
         try:
             json_match = re.search(r'\{.*\}', output, re.DOTALL)
             if json_match:
@@ -132,65 +97,10 @@ Start now by doing your first web_search."""
                     key_findings=sections['findings'],
                     conclusion=sections['conclusion']
                 )
-            return {"success": True, "report": report.dict(), "topic": topic, "raw_output": output}
+            result_dict = {"success": True, "report": report.dict(), "topic": topic, "raw_output": output}
+            # Cache the result
+            cache.set(topic, result_dict)
+            return result_dict
         except Exception as e:
             logger.error(f"Parsing failed: {e}")
             return {"success": False, "error": f"Parsing error: {e}", "raw_output": output, "topic": topic}
-
-    def _extract_sections(self, text: str, topic: str) -> Dict[str, Any]:
-        sections = {'title': f"Report on: {topic}", 'introduction': '', 'findings': [], 'conclusion': ''}
-        lines = text.split('\n')
-        current = None
-        buf = []
-        for line in lines:
-            low = line.lower().strip()
-            if 'title' in low and ':' in line and not sections['title']:
-                sections['title'] = line.split(':', 1)[-1].strip()
-            elif 'introduction' in low or 'executive summary' in low:
-                current = 'intro'
-            elif 'key finding' in low or 'finding' in low:
-                current = 'finding'
-            elif 'conclusion' in low or 'future outlook' in low:
-                current = 'conclusion'
-            elif current == 'intro' and line.strip() and len(line.strip()) > 20:
-                sections['introduction'] += line.strip() + ' '
-            elif current == 'finding' and line.strip() and len(line.strip()) > 20:
-                buf.append(line.strip())
-            elif current == 'conclusion' and line.strip() and len(line.strip()) > 20:
-                sections['conclusion'] += line.strip() + ' '
-        if buf:
-            sections['findings'] = buf[:5]
-        else:
-            sections['findings'] = [
-                "Research was conducted using real-time web searches.",
-                "Multiple sources were consulted.",
-                "The topic shows significant developments."
-            ]
-        if not sections['introduction']:
-            sections['introduction'] = "This report summarizes key findings."
-        if not sections['conclusion']:
-            sections['conclusion'] = "Continued monitoring is recommended."
-        return sections
-
-_agent_instance = None
-def get_agent():
-    global _agent_instance
-    if _agent_instance is None:
-        _agent_instance = ResearchAgent()
-    return _agent_instance
-
-# In agent.py
-from cache import cache
-
-def research(self, topic: str):
-    # Check cache first
-    cached = cache.get(topic)
-    if cached:
-        logger.info(f"✅ Returning cached result for: {topic[:50]}...")
-        return cached
-    
-    # ... existing research logic ...
-    
-    # Cache the result
-    cache.set(topic, result)
-    return result

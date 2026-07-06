@@ -1,12 +1,27 @@
-# Streamlit UI
 import streamlit as st
+import os
 import json
 import time
 from datetime import datetime
-from agent import get_agent
-from logger import logger
+from dotenv import load_dotenv
 
-# Page configuration
+# ------------------------------------------------------------------
+# 1. LOAD API KEYS: st.secrets (cloud) OR .env (local)
+# ------------------------------------------------------------------
+load_dotenv()  # local development
+
+# Override environment variables with Streamlit secrets (if available)
+if "OPENAI_API_KEY" in st.secrets:
+    os.environ["OPENAI_API_KEY"] = st.secrets["OPENAI_API_KEY"]
+if "TAVILY_API_KEY" in st.secrets:
+    os.environ["TAVILY_API_KEY"] = st.secrets["TAVILY_API_KEY"]
+
+# Now import the agent (which reads from os.environ)
+from agent import get_agent
+
+# ------------------------------------------------------------------
+# 2. PAGE CONFIG
+# ------------------------------------------------------------------
 st.set_page_config(
     page_title="AI Research Agent",
     page_icon="🧠",
@@ -56,35 +71,25 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# Header
+# ------------------------------------------------------------------
+# 3. HEADER
+# ------------------------------------------------------------------
 st.markdown('<div class="main-header">🧠 AI Research & Reporting Agent</div>', unsafe_allow_html=True)
-st.markdown('<div class="sub-header">Autonomous research assistant powered by LangChain & OpenAI</div>', unsafe_allow_html=True)
+st.markdown('<div class="sub-header">Autonomous research assistant powered by LangGraph & OpenAI</div>', unsafe_allow_html=True)
 
-# Sidebar
+# ------------------------------------------------------------------
+# 4. SIDEBAR – show key status
+# ------------------------------------------------------------------
 with st.sidebar:
-    st.markdown("### ⚙️ Configuration")
-    
-    api_key = st.text_input(
-        "OpenAI API Key",
-        type="password",
-        help="Enter your OpenAI API key. It will not be stored."
-    )
-    
-    tavily_key = st.text_input(
-        "Tavily API Key",
-        type="password",
-        help="Enter your Tavily API key for web search."
-    )
-    
-    st.markdown("---")
-    st.markdown("### 📊 Status")
-    
-    # Status indicators
-    if api_key and tavily_key:
+    st.markdown("### ⚙️ Status")
+    # Check if keys are loaded
+    openai_ok = bool(os.getenv("OPENAI_API_KEY"))
+    tavily_ok = bool(os.getenv("TAVILY_API_KEY"))
+    if openai_ok and tavily_ok:
         st.success("✅ API Keys Configured")
     else:
-        st.warning("⚠️ Please enter API keys")
-    
+        st.warning("⚠️ Please add API keys in Streamlit secrets or .env")
+
     st.markdown("---")
     st.markdown("### 🚀 Features")
     st.markdown("""
@@ -94,43 +99,27 @@ with st.sidebar:
     - ✅ Real-time feedback
     - ✅ Exportable reports
     """)
-    
-    st.markdown("---")
-    st.markdown("### 📝 Tips")
-    st.markdown("""
-    - Be specific with your topic
-    - Include context or subtopics
-    - The agent makes multiple searches
-    - Reports are always structured
-    """)
 
-# Main content area
-col1, col2 = st.columns([3, 1])
+# ------------------------------------------------------------------
+# 5. MAIN AREA
+# ------------------------------------------------------------------
+topic = st.text_area(
+    "🔍 What would you like to research?",
+    placeholder="e.g., The impact of generative AI on software development in 2026",
+    height=80
+)
 
-with col1:
-    # Input section
-    topic = st.text_area(
-        "🔍 What would you like to research?",
-        placeholder="e.g., The impact of generative AI on software development in 2026",
-        height=80
-    )
-    
-    col_btn1, col_btn2, col_btn3 = st.columns([1, 1, 1])
-    
-    with col_btn1:
-        research_btn = st.button("🚀 Start Research", type="primary", use_container_width=True)
-    
-    with col_btn2:
-        example_btn = st.button("📋 Load Example", use_container_width=True)
-    
-    with col_btn3:
-        clear_btn = st.button("🗑️ Clear Results", use_container_width=True)
+col_btn1, col_btn2, col_btn3 = st.columns([1, 1, 1])
+with col_btn1:
+    research_btn = st.button("🚀 Start Research", type="primary", use_container_width=True)
+with col_btn2:
+    example_btn = st.button("📋 Load Example", use_container_width=True)
+with col_btn3:
+    clear_btn = st.button("🗑️ Clear Results", use_container_width=True)
 
-# Handle example load
 if example_btn:
     topic = "The future of AI-powered customer support in B2B SaaS companies"
 
-# Handle clear
 if clear_btn:
     st.session_state['results'] = None
     st.rerun()
@@ -139,60 +128,47 @@ if clear_btn:
 if 'results' not in st.session_state:
     st.session_state['results'] = None
 
-# Research execution
+# ------------------------------------------------------------------
+# 6. RESEARCH EXECUTION
+# ------------------------------------------------------------------
 if research_btn and topic:
-    if not api_key or not tavily_key:
-        st.error("❌ Please enter both API keys in the sidebar before starting.")
+    if not openai_ok or not tavily_ok:
+        st.error("❌ Missing API keys. Please set them in Streamlit secrets or .env.")
     else:
         with st.spinner("🔬 Researching... This may take 10-20 seconds."):
             try:
-                # Update environment variables
-                import os
-                os.environ['OPENAI_API_KEY'] = api_key
-                os.environ['TAVILY_API_KEY'] = tavily_key
-                
-                # Initialize agent
                 agent = get_agent()
-                
-                # Start timer
                 start_time = time.time()
-                
-                # Perform research
                 result = agent.research(topic)
-                
-                # Calculate duration
                 duration = time.time() - start_time
-                
-                # Store results
+
                 st.session_state['results'] = result
                 st.session_state['duration'] = duration
-                
-                # Log success
-                logger.info(f"Research completed in {duration:.2f} seconds for '{topic}'")
-                
+
             except Exception as e:
                 st.error(f"❌ An error occurred: {str(e)}")
-                logger.error(f"Application error: {str(e)}", exc_info=True)
+                import traceback
+                st.code(traceback.format_exc())
 
-# Display results
+# ------------------------------------------------------------------
+# 7. DISPLAY RESULTS
+# ------------------------------------------------------------------
 if st.session_state['results']:
     result = st.session_state['results']
     duration = st.session_state.get('duration', 0)
-    
-    # Show duration
+
     st.info(f"⏱️ Research completed in {duration:.2f} seconds")
-    
+
     if result.get('success'):
         report = result['report']
-        
-        # Display report
+
         st.markdown("---")
         st.markdown(f"## 📄 {report.get('title', 'Research Report')}")
-        
+
         # Introduction
         st.markdown("### 📖 Introduction")
         st.write(report.get('introduction', ''))
-        
+
         # Key Findings
         st.markdown("### 🔑 Key Findings")
         findings = report.get('key_findings', [])
@@ -202,33 +178,23 @@ if st.session_state['results']:
                 <strong>Finding {i}:</strong> {finding}
             </div>
             """, unsafe_allow_html=True)
-        
+
         # Conclusion
         st.markdown("### 🎯 Conclusion")
         st.write(report.get('conclusion', ''))
-        
+
         # Sources (if available)
         sources = report.get('sources')
         if sources:
             st.markdown("### 📚 Sources")
             for source in sources:
                 st.markdown(f"- {source}")
-        
-        # Metadata
-        st.markdown("---")
-        st.markdown("### 📊 Report Metadata")
-        col_m1, col_m2, col_m3 = st.columns(3)
-        with col_m1:
-            st.metric("Topic", result.get('topic', 'N/A'))
-        with col_m2:
-            st.metric("Timestamp", report.get('research_timestamp', 'N/A')[:10])
-        with col_m3:
-            st.metric("Findings", len(findings))
-        
+
         # Export options
+        st.markdown("---")
         st.markdown("### 💾 Export Report")
         col_e1, col_e2 = st.columns(2)
-        
+
         with col_e1:
             json_str = json.dumps(report, indent=2)
             st.download_button(
@@ -238,25 +204,22 @@ if st.session_state['results']:
                 mime="application/json",
                 use_container_width=True
             )
-        
+
         with col_e2:
-            findings_text = "\n\n".join(
-                f"**Finding {i + 1}:** {finding}"
-                for i, finding in enumerate(findings)
-            )
-            markdown_report = f"""# {report.get('title')}
+            markdown_report = f"""
+# {report.get('title')}
 
 ## Introduction
 {report.get('introduction')}
 
 ## Key Findings
-{findings_text}
+{''.join([f'**Finding {i+1}:** {f}\n\n' for i, f in enumerate(findings)])}
 
 ## Conclusion
 {report.get('conclusion')}
 
 ---
-*Generated by AI Research Agent on {report.get('research_timestamp')}*
+*Generated by AI Research Agent on {report.get('research_timestamp', datetime.now().isoformat())}*
 """
             st.download_button(
                 label="📥 Download Markdown",
@@ -265,29 +228,23 @@ if st.session_state['results']:
                 mime="text/markdown",
                 use_container_width=True
             )
-        
-        # Show raw JSON in expander
+
+        # Show raw JSON
         with st.expander("🔍 View Raw JSON"):
             st.json(report)
-            
+
     else:
-        # Error display
-        st.markdown("""
-        <div class="error-box">
-            <strong>❌ Research Failed</strong><br>
-            {error}
-        </div>
-        """.format(error=result.get('error', 'Unknown error')), unsafe_allow_html=True)
-        
-        # Show raw output if available
+        st.error(f"❌ Research failed: {result.get('error', 'Unknown error')}")
         if result.get('raw_output'):
             with st.expander("🔍 View Raw Output"):
                 st.text(result['raw_output'])
 
-# Footer
+# ------------------------------------------------------------------
+# 8. FOOTER
+# ------------------------------------------------------------------
 st.markdown("---")
 st.markdown("""
 <div style="text-align: center; color: #666; font-size: 0.8rem;">
-    Built using LangChain, OpenAI, and Streamlit
+    Built with ❤️ using LangGraph, OpenAI, and Streamlit
 </div>
 """, unsafe_allow_html=True)
